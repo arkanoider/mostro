@@ -1,5 +1,5 @@
 use crate::cli::settings::Settings;
-use crate::error::MostroError;
+use crate::db::MostroDatabaseError;
 use crate::lightning;
 use crate::lightning::LndConnector;
 use crate::messages;
@@ -7,7 +7,6 @@ use crate::models::Yadio;
 use crate::nip33::{new_event, order_to_tags};
 use crate::{db, flow};
 
-use anyhow::{Context, Result};
 use log::{error, info};
 use mostro_core::order::{Kind as OrderKind, NewOrder, Order, SmallOrder, Status};
 use mostro_core::{Action, Content, Message};
@@ -15,7 +14,6 @@ use nostr_sdk::prelude::*;
 use sqlx::types::chrono::Utc;
 use sqlx::SqlitePool;
 use sqlx::{Pool, Sqlite};
-use std::fmt::Write;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
@@ -24,10 +22,52 @@ use tokio::sync::Mutex;
 use tonic_openssl_lnd::lnrpc::invoice::InvoiceState;
 use uuid::Uuid;
 
-pub async fn retries_yadio_request(req_string: &String) -> Result<reqwest::Response> {
-    let res = reqwest::get(req_string)
-        .await
-        .context("Something went wrong with API request, try again!")?;
+use std::error::Error;
+use std::fmt;
+use std::fmt::{Display, Formatter, Write};
+
+
+#[derive(Debug)]
+pub struct MostroAppError {
+    pub kind: FromAppErrorKind,
+}
+
+impl Display for MostroAppError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match &self.kind {
+            FromAppErrorKind::APIChangeRate => write!(
+                f,
+                "Something went wrong in change rate request, retry later"
+            ),
+            FromAppErrorKind::NostrSdk(e) => write!(f, "Nostr Sdk error {e}"),
+            FromAppErrorKind::DbAccess { source } => write!(f,"Database error caused by: {}",source),
+        }
+    }
+}
+
+impl Error for MostroAppError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match &self.kind {
+            FromAppErrorKind::DbAccess { source } => Some(source),
+            //FromAppErrorKind::NostrSdk(e)  => Some(source),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum FromAppErrorKind {
+    APIChangeRate,
+    DbAccess { source: MostroDatabaseError },
+    NostrSdk(nostr_sdk::prelude::Error),
+}
+
+pub async fn retries_yadio_request(
+    req_string: &String,
+) -> Result<reqwest::Response, MostroAppError> {
+    let res = reqwest::get(req_string).await.map_err(|_| MostroAppError {
+        kind: FromAppErrorKind::APIChangeRate,
+    })?;
 
     Ok(res)
 }
@@ -37,7 +77,7 @@ pub async fn get_market_quote(
     fiat_amount: &i64,
     fiat_code: &str,
     premium: &i64,
-) -> Result<i64, MostroError> {
+) -> Result<i64, MostroAppError> {
     // Add here check for market price
     let req_string = format!(
         "https://api.yadio.io/convert/{}/{}/BTC",
@@ -65,14 +105,18 @@ pub async fn get_market_quote(
 
     // Case no answers from Yadio
     if req.is_none() {
-        return Err(MostroError::NoAPIResponse);
-    }
+        return Err(MostroAppError {
+            kind: FromAppErrorKind::APIChangeRate,
+        });
+    };
 
-    let quote = req.unwrap().json::<Yadio>().await;
-    if quote.is_err() {
-        return Err(MostroError::NoAPIResponse);
-    }
-    let quote = quote.unwrap();
+    let quote = req
+        .unwrap()
+        .json::<Yadio>()
+        .await
+        .map_err(|_| MostroAppError {
+            kind: FromAppErrorKind::APIChangeRate,
+        })?;
 
     let mut sats = quote.result * 100_000_000_f64;
 
@@ -92,8 +136,12 @@ pub async fn publish_order(
     initiator_pubkey: &str,
     master_pubkey: &str,
     ack_pubkey: XOnlyPublicKey,
-) -> Result<()> {
-    let order = crate::db::add_order(pool, new_order, "", initiator_pubkey, master_pubkey).await?;
+) -> Result<EventId, MostroAppError> {
+    let order = crate::db::add_order(pool, new_order, "", initiator_pubkey, master_pubkey)
+        .await
+        .map_err(|s| MostroAppError {
+            kind: FromAppErrorKind::DbAccess { source: s },
+        })?;
     let order_id = order.id;
     info!("New order saved Id: {}", order_id);
     // We transform the order fields to tags to use in the event
@@ -116,7 +164,11 @@ pub async fn publish_order(
     let order_string = order.as_json().unwrap();
     info!("serialized order: {order_string}");
     // nip33 kind with order fields as tags and order id as identifier
-    let event = new_event(keys, order_string, order_id.to_string(), tags)?;
+    let event = new_event(keys, order_string, order_id.to_string(), tags).map_err(|err| {
+        MostroAppError {
+            kind: FromAppErrorKind::NostrSdk(err.to_string()),
+        }
+    })?;
     info!("Order event to be published: {event:#?}");
     let event_id = event.id.to_string();
     info!("Publishing Event Id: {event_id} for Order Id: {order_id}");
@@ -128,7 +180,10 @@ pub async fn publish_order(
         &event_id,
         order.amount,
     )
-    .await?;
+    .await
+    .map_err(|s| MostroAppError {
+        kind: FromAppErrorKind::DbAccess { source: s },
+    })?;
 
     // Send message as ack with small order
     let ack_message = Message::new(
@@ -145,8 +200,9 @@ pub async fn publish_order(
     client
         .send_event(event)
         .await
-        .map(|_s| ())
-        .map_err(|err| err.into())
+        .map_err(|err| MostroAppError {
+            kind: FromAppErrorKind::NostrSdk(err.to_string()),
+        })
 }
 
 pub async fn send_dm(
@@ -154,13 +210,23 @@ pub async fn send_dm(
     sender_keys: &Keys,
     receiver_pubkey: &XOnlyPublicKey,
     content: String,
-) -> Result<()> {
+) -> Result<(), MostroAppError> {
     info!("DM content: {content:#?}");
-    let event =
+    let event = (|| {
         EventBuilder::new_encrypted_direct_msg(sender_keys, *receiver_pubkey, content, None)?
-            .to_event(sender_keys)?;
+            .to_event(sender_keys)
+    })()
+    .map_err(|err| MostroAppError {
+        kind: FromAppErrorKind::NostrSdk(err.to_string()),
+    })?;
+
     info!("Sending event: {event:#?}");
-    client.send_event(event).await?;
+    client
+        .send_event(event)
+        .await
+        .map_err(|err| MostroAppError {
+            kind: FromAppErrorKind::NostrSdk(err.to_string()),
+        })?;
 
     Ok(())
 }
@@ -258,7 +324,12 @@ pub async fn connect_nostr() -> Result<Client> {
 
     // Add relays
     for r in relays.into_iter() {
-        client.add_relay(r, None).await?;
+        client
+            .add_relay(r, None)
+            .await
+            .map_err(|err| MostroAppError {
+                kind: FromAppErrorKind::NostrSdk(err.to_string()),
+            })?;
     }
 
     // Connect to relays and keep connection alive
@@ -275,7 +346,7 @@ pub async fn show_hold_invoice(
     buyer_pubkey: &XOnlyPublicKey,
     seller_pubkey: &XOnlyPublicKey,
     order: &Order,
-) -> anyhow::Result<()> {
+) -> Result<(), MostroAppError> {
     let mut ln_client = lightning::LndConnector::new().await;
     let mostro_settings = Settings::get_mostro();
     // Add fee of seller to hold invoice
