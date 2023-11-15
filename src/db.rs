@@ -18,7 +18,10 @@ pub struct MostroDatabaseError {
 
 impl Display for MostroDatabaseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "Error in database operations")
+        match &self.kind {
+           FromDbErrorKind::Db { .. } => write!(f, "Error in database operations"),
+           FromDbErrorKind::Parse { .. } => write!(f, "Parse error in db.rs file"),
+        }
     }
 }
 
