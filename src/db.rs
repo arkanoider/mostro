@@ -11,7 +11,7 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct MostroDatabaseError {
     pub kind: FromDbErrorKind,
 }
@@ -20,7 +20,7 @@ impl Display for MostroDatabaseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match &self.kind {
            FromDbErrorKind::Db { .. } => write!(f, "Error in database operations"),
-           FromDbErrorKind::Parse { .. } => write!(f, "Parse error in db.rs file"),
+           FromDbErrorKind::Parse { .. } => write!(f, "Parse error in database operations"),
         }
     }
 }
@@ -34,7 +34,7 @@ impl Error for MostroDatabaseError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq)]
 pub enum FromDbErrorKind {
     Db { source: sqlx::Error },
     Parse { source: nip19::Error },

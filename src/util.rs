@@ -27,7 +27,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter, Write};
 
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct MostroAppError {
     pub kind: FromAppErrorKind,
 }
@@ -39,8 +39,10 @@ impl Display for MostroAppError {
                 f,
                 "Something went wrong in change rate request, retry later"
             ),
-            FromAppErrorKind::NostrSdk(e) => write!(f, "Nostr Sdk error {e}"),
-            FromAppErrorKind::DbAccess { source } => write!(f,"Database error caused by: {}",source),
+            FromAppErrorKind::NostrSdkEvent { .. } => write!(f, "Nostr Sdk event error"),
+            FromAppErrorKind::NostrSdkClient { .. } => write!(f, "Nostr Sdk client error"),
+            FromAppErrorKind::DbAccess { .. } => write!(f,"Database error"),
+            FromAppErrorKind::Parse { .. } => write!(f,"Parse error"),
         }
     }
 }
@@ -49,17 +51,21 @@ impl Error for MostroAppError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self.kind {
             FromAppErrorKind::DbAccess { source } => Some(source),
-            //FromAppErrorKind::NostrSdk(e)  => Some(source),
+            FromAppErrorKind::NostrSdkEvent { source}  => Some(source),
+            FromAppErrorKind::NostrSdkClient { source } => Some(source),
+            FromAppErrorKind::Parse { source } => Some(source),
             _ => None,
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq)]
 pub enum FromAppErrorKind {
     APIChangeRate,
     DbAccess { source: MostroDatabaseError },
-    NostrSdk(nostr_sdk::prelude::Error),
+    NostrSdkEvent { source: nostr_sdk::prelude::builder::Error},
+    NostrSdkClient{ source: nostr_sdk::client::Error },
+    Parse{ source : serde_json::Error },
 }
 
 pub async fn retries_yadio_request(
@@ -164,9 +170,9 @@ pub async fn publish_order(
     let order_string = order.as_json().unwrap();
     info!("serialized order: {order_string}");
     // nip33 kind with order fields as tags and order id as identifier
-    let event = new_event(keys, order_string, order_id.to_string(), tags).map_err(|err| {
+    let event = new_event(keys, order_string, order_id.to_string(), tags).map_err(|s| {
         MostroAppError {
-            kind: FromAppErrorKind::NostrSdk(err.to_string()),
+            kind: FromAppErrorKind::NostrSdkEvent{ source : s },
         }
     })?;
     info!("Order event to be published: {event:#?}");
@@ -200,8 +206,8 @@ pub async fn publish_order(
     client
         .send_event(event)
         .await
-        .map_err(|err| MostroAppError {
-            kind: FromAppErrorKind::NostrSdk(err.to_string()),
+        .map_err(|s| MostroAppError {
+            kind: FromAppErrorKind::NostrSdkClient{ source : s },
         })
 }
 
@@ -216,16 +222,16 @@ pub async fn send_dm(
         EventBuilder::new_encrypted_direct_msg(sender_keys, *receiver_pubkey, content, None)?
             .to_event(sender_keys)
     })()
-    .map_err(|err| MostroAppError {
-        kind: FromAppErrorKind::NostrSdk(err.to_string()),
+    .map_err(|s| MostroAppError {
+        kind: FromAppErrorKind::NostrSdkEvent{ source : s },
     })?;
 
     info!("Sending event: {event:#?}");
     client
         .send_event(event)
         .await
-        .map_err(|err| MostroAppError {
-            kind: FromAppErrorKind::NostrSdk(err.to_string()),
+        .map_err(|s| MostroAppError {
+            kind: FromAppErrorKind::NostrSdkClient{ source : s },
         })?;
 
     Ok(())
@@ -327,8 +333,8 @@ pub async fn connect_nostr() -> Result<Client> {
         client
             .add_relay(r, None)
             .await
-            .map_err(|err| MostroAppError {
-                kind: FromAppErrorKind::NostrSdk(err.to_string()),
+            .map_err(|s| MostroAppError {
+                kind: FromAppErrorKind::NostrSdkClient{ source : s},
             })?;
     }
 

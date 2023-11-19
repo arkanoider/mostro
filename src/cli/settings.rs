@@ -46,7 +46,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct MostroSettingsError {
     pub path: Option<Box<Path>>,
     pub kind: FromConfigErrorKind,
@@ -71,7 +71,7 @@ impl Error for MostroSettingsError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq)]
 pub enum FromConfigErrorKind {
     Io(io::Error),
     TomlFileError { source: ConfigError },
