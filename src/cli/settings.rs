@@ -71,7 +71,7 @@ impl Error for MostroSettingsError {
     }
 }
 
-#[derive(Debug, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum FromConfigErrorKind {
     Io(io::Error),
     TomlFileError { source: ConfigError },

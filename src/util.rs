@@ -26,7 +26,6 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
 
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct MostroAppError {
     pub kind: FromAppErrorKind,
@@ -39,10 +38,9 @@ impl Display for MostroAppError {
                 f,
                 "Something went wrong in change rate request, retry later"
             ),
-            FromAppErrorKind::NostrSdkEvent { .. } => write!(f, "Nostr Sdk event error"),
-            FromAppErrorKind::NostrSdkClient { .. } => write!(f, "Nostr Sdk client error"),
-            FromAppErrorKind::DbAccess { .. } => write!(f,"Database error"),
-            FromAppErrorKind::Parse { .. } => write!(f,"Parse error"),
+            FromAppErrorKind::DbAccess { .. } => write!(f, "Database error"),
+            FromAppErrorKind::Parse { .. } => write!(f, "Parse error"),
+            FromAppErrorKind::NostrSdk { .. } => write!(f, "Nostr Sdk error"),
         }
     }
 }
@@ -51,21 +49,19 @@ impl Error for MostroAppError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self.kind {
             FromAppErrorKind::DbAccess { source } => Some(source),
-            FromAppErrorKind::NostrSdkEvent { source}  => Some(source),
-            FromAppErrorKind::NostrSdkClient { source } => Some(source),
+            FromAppErrorKind::NostrSdk { source } => Some(source),
             FromAppErrorKind::Parse { source } => Some(source),
             _ => None,
         }
     }
 }
 
-#[derive(Debug, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum FromAppErrorKind {
     APIChangeRate,
     DbAccess { source: MostroDatabaseError },
-    NostrSdkEvent { source: nostr_sdk::prelude::builder::Error},
-    NostrSdkClient{ source: nostr_sdk::client::Error },
-    Parse{ source : serde_json::Error },
+    NostrSdk { source: Box<dyn Error> },
+    Parse { source: serde_json::Error },
 }
 
 pub async fn retries_yadio_request(
@@ -167,14 +163,16 @@ pub async fn publish_order(
         None,
         Utc::now().timestamp(),
     );
-    let order_string = order.as_json().unwrap();
+    let order_string = order.as_json().map_err(|s| MostroAppError {
+        kind: FromAppErrorKind::Parse { source: s },
+    });
+
     info!("serialized order: {order_string}");
     // nip33 kind with order fields as tags and order id as identifier
-    let event = new_event(keys, order_string, order_id.to_string(), tags).map_err(|s| {
-        MostroAppError {
-            kind: FromAppErrorKind::NostrSdkEvent{ source : s },
-        }
-    })?;
+    let event =
+        new_event(keys, order_string, order_id.to_string(), tags).map_err(|s| MostroAppError {
+            kind: FromAppErrorKind::NostrSdk { source: s },
+        })?;
     info!("Order event to be published: {event:#?}");
     let event_id = event.id.to_string();
     info!("Publishing Event Id: {event_id} for Order Id: {order_id}");
@@ -199,16 +197,15 @@ pub async fn publish_order(
         Action::Order,
         Some(Content::Order(order.clone())),
     );
-    let ack_message = ack_message.as_json()?;
+    let ack_message = ack_message.as_json().map_err(|s| MostroAppError {
+        kind: FromAppErrorKind::DbAccess { source: s },
+    })?;
 
     send_dm(client, keys, &ack_pubkey, ack_message).await?;
 
-    client
-        .send_event(event)
-        .await
-        .map_err(|s| MostroAppError {
-            kind: FromAppErrorKind::NostrSdkClient{ source : s },
-        })
+    client.send_event(event).await.map_err(|s| MostroAppError {
+        kind: FromAppErrorKind::NostrSdk { source: s },
+    })
 }
 
 pub async fn send_dm(
@@ -223,16 +220,13 @@ pub async fn send_dm(
             .to_event(sender_keys)
     })()
     .map_err(|s| MostroAppError {
-        kind: FromAppErrorKind::NostrSdkEvent{ source : s },
+        kind: FromAppErrorKind::NostrSdk { source: s },
     })?;
 
     info!("Sending event: {event:#?}");
-    client
-        .send_event(event)
-        .await
-        .map_err(|s| MostroAppError {
-            kind: FromAppErrorKind::NostrSdkClient{ source : s },
-        })?;
+    client.send_event(event).await.map_err(|s| MostroAppError {
+        kind: FromAppErrorKind::NostrSdk { source: s },
+    })?;
 
     Ok(())
 }
@@ -240,7 +234,9 @@ pub async fn send_dm(
 pub fn get_keys() -> Result<Keys> {
     let nostr_settings = Settings::get_nostr();
     // nostr private key
-    let my_keys = Keys::from_sk_str(&nostr_settings.nsec_privkey)?;
+    let my_keys = Keys::from_sk_str(&nostr_settings.nsec_privkey).map_err(|s| MostroAppError {
+        kind: FromAppErrorKind::NostrSdk { source: s },
+    })?;
 
     Ok(my_keys)
 }
@@ -261,10 +257,14 @@ pub async fn update_user_rating_event(
     info!("Sending replaceable event: {event:#?}");
     // We update the order vote status
     if buyer_sent_rate {
-        crate::db::update_order_event_buyer_rate(pool, order_id, buyer_sent_rate).await?;
+        crate::db::update_order_event_buyer_rate(pool, order_id, buyer_sent_rate).await.map_err(|s| MostroAppError {
+            kind: FromAppErrorKind::DbAccess { source: s },
+        })?;
     }
     if seller_sent_rate {
-        crate::db::update_order_event_seller_rate(pool, order_id, seller_sent_rate).await?;
+        crate::db::update_order_event_seller_rate(pool, order_id, seller_sent_rate).map_err(|s| MostroAppError {
+            kind: FromAppErrorKind::DbAccess { source: s },
+        })?;
     }
 
     // Add event message to global list
@@ -297,19 +297,25 @@ pub async fn update_order_event(
         None,
         order.created_at,
     );
-    let order_content = publish_order.as_json()?;
+    let order_content = publish_order.as_json().map_err(|s| MostroAppError {
+        kind: FromAppErrorKind::Parse { source: s },
+    })?;
     let mut order = order.clone();
     // update order.status with new status
     order.status = status.to_string();
     // We transform the order fields to tags to use in the event
     let tags = order_to_tags(&order);
     // nip33 kind with order id as identifier and order fields as tags
-    let event = new_event(keys, order_content, order.id.to_string(), tags)?;
+    let event = new_event(keys, order_content, order.id.to_string(), tags).map_err(|s| MostroAppError {
+        kind: FromAppErrorKind::NostrSdk { source: s },
+    })?;
     let event_id = event.id.to_string();
     let status_str = status.to_string();
     info!("Sending replaceable event: {event:#?}");
     // We update the order id with the new event_id
-    crate::db::update_order_event_id_status(pool, order.id, &status, &event_id, amount).await?;
+    crate::db::update_order_event_id_status(pool, order.id, &status, &event_id, amount).map_err(|s| MostroAppError {
+        kind: FromAppErrorKind::Parse { source : s },
+    })?;
     info!(
         "Order Id: {} updated Nostr new Status: {}",
         order.id, status_str
@@ -334,7 +340,7 @@ pub async fn connect_nostr() -> Result<Client> {
             .add_relay(r, None)
             .await
             .map_err(|s| MostroAppError {
-                kind: FromAppErrorKind::NostrSdkClient{ source : s},
+                kind: FromAppErrorKind::NostrSdk { source: s },
             })?;
     }
 

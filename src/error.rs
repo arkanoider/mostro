@@ -1,14 +1,27 @@
-use std::fmt;
+use crate::cli::settings::MostroSettingsError;
 use crate::db::MostroDatabaseError;
 use crate::util::MostroAppError;
-use crate::cli::settings::MostroSettingsError;
-
+use std::fmt;
 
 // #[derive(Debug, PartialEq, Eq)]
 // pub struct MostroError{
 //     pub kind: MostroGlobalError,
 // }
 
+// #[derive(Debug, PartialEq, Eq)]
+// pub enum MostroAppError {
+//     AddInvoice,
+//     AdminCancel,
+//     AdminSettle,
+//     Cancel,
+//     Dispute,
+//     FiatSent,
+//     Order,
+//     RateUser,
+//     Release,
+//     TakeBuy,
+//     TakeSell,
+// }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MostroError {

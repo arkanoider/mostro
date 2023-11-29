@@ -19,8 +19,9 @@ pub struct MostroDatabaseError {
 impl Display for MostroDatabaseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match &self.kind {
-           FromDbErrorKind::Db { .. } => write!(f, "Error in database operations"),
-           FromDbErrorKind::Parse { .. } => write!(f, "Parse error in database operations"),
+            FromDbErrorKind::Db { .. } => write!(f, "Error in database operations"),
+            FromDbErrorKind::Parse { .. } => write!(f, "Parse error in database operations"),
+            FromDbErrorKind::Generic { .. } => write!(f, "Generic error"),
         }
     }
 }
@@ -30,14 +31,16 @@ impl Error for MostroDatabaseError {
         match &self.kind {
             FromDbErrorKind::Db { source } => Some(source),
             FromDbErrorKind::Parse { source } => Some(source),
+            FromDbErrorKind::Generic { source } => Some(&source),
         }
     }
 }
 
-#[derive(Debug, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum FromDbErrorKind {
     Db { source: sqlx::Error },
     Parse { source: nip19::Error },
+    Generic { source: Box<dyn Error> },
 }
 
 use crate::cli::settings::Settings;
