@@ -38,6 +38,7 @@ That will verify the signature of the manifest file, which ensures integrity and
 
 * fix on changelog
 * fix on changelog
+* fix on changelog
 * add changelog.md
 * add changelog.md
 * add file2.txt
