@@ -26,6 +26,7 @@ That will verify the signature of the manifest file, which ensures integrity and
 ### ⚙️ Miscellaneous Tasks
 
 
+* added file3
 * added file3 by [@arkanoider](https://github.com/arkanoider)
 * added file3 by [@arkanoider](https://github.com/arkanoider)
 
