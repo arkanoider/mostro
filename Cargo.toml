@@ -36,7 +36,7 @@ allow-branch = ["main"]
 pre-release-hook = [
   "sh",
   "-c",
-  "if [ \"$DRY_RUN\" != \"true\" ]; then rm -f CHANGELOG.md; fi && GITHUB_TOKEN=\"${GITHUB_TOKEN:-}\" git cliff --unreleased --strip header --github-repo arkanoider/mostro -o CHANGELOG.md && if [ \"$DRY_RUN\" != \"true\" ]; then git add -A && (git diff --cached --quiet || git commit -m \"chore(release): prepare release\"); else echo \"DRY RUN: Skip git add and commit\"; fi",
+  "git cliff --unreleased --github-repo arkanoider/mostro -o CHANGELOG.md --tag {{version}} && if [ \"$DRY_RUN\" != \"true\" ]; then git diff --quiet CHANGELOG.md || git add CHANGELOG.md && git commit -m \"chore(release): update CHANGELOG for version {{version}}\"; else echo \"DRY RUN: Skip git add and commit\"; fi",
 ]
 
 [dependencies]
