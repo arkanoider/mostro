@@ -39,6 +39,27 @@ Please note that Pull Requests marked `NACK` and/or GitHub's `Change requested` 
 
 Run `cargo fmt` and `cargo clippy` before committing to ensure that code is consistently formatted.
 
+## Release Process
+
+When creating releases, you'll need to install `git-cliff` to generate the changelog:
+
+```bash
+cargo install git-cliff
+```
+
+### GitHub Token Setup
+
+To avoid GitHub API rate limits, set up a GitHub token for `git-cliff`:
+
+1. Create a GitHub personal access token (classic or fine-grained, no permissions required)
+2. Set the token as an environment variable:
+   ```bash
+   export GITHUB_TOKEN="your_token_here"
+   ```
+3. Or add it to your shell profile (e.g., `~/.bashrc`, `~/.zshrc`)
+
+The release process will automatically generate and commit a `CHANGELOG.md` file before creating the release tag.
+
 ### Configure Git user name and email metadata
 
 See <https://help.github.com/articles/setting-your-username-in-git/> for instructions.
