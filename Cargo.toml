@@ -34,9 +34,7 @@ sign-tag = true
 allow-branch = ["main"]
 # Generate CHANGELOG.md before creating the release tag (only during actual release, not dry-run)
 pre-release-hook = [
-  "sh",
-  "-c",
-  "git cliff --unreleased --github-repo arkanoider/mostro -o CHANGELOG.md --tag {{version}} && if [ \"$DRY_RUN\" != \"true\" ]; then git diff --quiet CHANGELOG.md || git add CHANGELOG.md && git commit -m \"chore(release): update CHANGELOG for version {{version}}\"; else echo \"DRY RUN: Skip git add and commit\"; fi",
+  "sh", "-c", "git cliff --unreleased --github-repo arkanoider/mostro -o CHANGELOG.md --tag {{version}} && if [ \"$DRY_RUN\" != \"true\" ]; then git diff --quiet CHANGELOG.md || git add CHANGELOG.md && git commit -m \"Update CHANGELOG for version {{version}}\"; else echo \"DRY RUN: Skip git add and commit\"; fi"
 ]
 
 [dependencies]
